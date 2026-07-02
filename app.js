@@ -96,18 +96,19 @@ app.post('/api/family/verify', async (req, res, next) => {
 
 app.post('/api/pair/create', requireParent, async (req, res, next) => {
   try {
-    await Db.cleanPairings();
     const { childId, childSnapshot } = req.body || {};
     if (!childId || !childSnapshot) {
       return res.status(400).json({ error: 'Missing childId or childSnapshot' });
     }
 
-    await Db.upsertChild(req.family.id, childId, childSnapshot);
+    const code = await Db.createPairingCode(
+      req.family.id,
+      childId,
+      childSnapshot,
+      CODE_TTL,
+      genCode
+    );
 
-    let code;
-    do { code = genCode(); } while (await Db.hasPairing(code));
-
-    await Db.addPairing(code, req.family.id, childId, Date.now() + CODE_TTL);
     res.json({ code, expiresIn: CODE_TTL, familyId: req.family.id });
   } catch (e) {
     next(e);
@@ -125,42 +126,47 @@ app.post('/api/sync/push', requireParent, async (req, res, next) => {
   }
 });
 
+app.get('/api/pair/check', async (req, res, next) => {
+  try {
+    const code = Db.normalizePairCode(req.query.code);
+    if (code.length !== 6) {
+      return res.json({ ok: false, reason: 'invalid_format' });
+    }
+    const pairing = await Db.getPairing(code);
+    if (!pairing) return res.json({ ok: false, reason: 'not_found' });
+    if (pairing.expiresAt < Date.now()) {
+      return res.json({ ok: false, reason: 'expired', expiresAt: pairing.expiresAt });
+    }
+    res.json({ ok: true, expiresAt: pairing.expiresAt, familyId: pairing.familyId });
+  } catch (e) {
+    next(e);
+  }
+});
+
 app.post('/api/pair/join', async (req, res, next) => {
   try {
-    await Db.cleanPairings();
     const { code, deviceName } = req.body || {};
-    const pairing = await Db.getPairing(code);
+    const result = await Db.joinWithPairingCode(code, deviceName, () => ({
+      deviceId: 'device_' + uuidv4().slice(0, 12),
+      deviceToken: 'dt_' + uuidv4().replace(/-/g, '') + Date.now().toString(36),
+    }));
 
-    if (!pairing || pairing.expiresAt < Date.now()) {
+    if (!result.ok) {
+      if (result.reason === 'invalid_format') {
+        return res.status(400).json({ error: 'Pairing code must be 6 digits' });
+      }
+      if (result.reason === 'no_child') {
+        return res.status(404).json({ error: 'Child profile not found' });
+      }
       return res.status(404).json({ error: 'Invalid or expired pairing code' });
     }
 
-    const family = await Db.getFamily(pairing.familyId);
-    const child = family?.children?.[pairing.childId];
-    if (!child) return res.status(404).json({ error: 'Child profile not found' });
-
-    const deviceId = 'device_' + uuidv4().slice(0, 12);
-    const deviceToken = 'dt_' + uuidv4().replace(/-/g, '') + Date.now().toString(36);
-    const now = Date.now();
-
-    await Db.addDevice(pairing.familyId, {
-      id: deviceId,
-      deviceToken,
-      childId: pairing.childId,
-      deviceName: deviceName || 'Kid Device',
-      pairedAt: now,
-      lastSeen: now,
-      online: true,
-    });
-
-    await Db.deletePairing(String(code));
-
     res.json({
-      deviceId,
-      deviceToken,
-      familyId: pairing.familyId,
-      childId: pairing.childId,
-      snapshot: child.snapshot,
+      deviceId: result.deviceId,
+      deviceToken: result.deviceToken,
+      familyId: result.familyId,
+      childId: result.childId,
+      snapshot: result.snapshot,
     });
   } catch (e) {
     next(e);
