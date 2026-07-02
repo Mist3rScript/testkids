@@ -146,6 +146,28 @@ app.get('/api/pair/check', async (req, res, next) => {
   }
 });
 
+app.get('/api/pair/status', requireParent, async (req, res, next) => {
+  try {
+    const childId = req.query.childId;
+    if (!childId) return res.status(400).json({ error: 'childId required' });
+
+    const devices = await Db.getDevicesForChild(req.family.id, childId);
+    const now = Date.now();
+    const mapped = devices.map(d => ({
+      id: d.id,
+      childId: d.childId,
+      deviceName: d.deviceName,
+      pairedAt: d.pairedAt,
+      lastSeen: d.lastSeen,
+      online: now - (d.lastSeen || 0) < 60000,
+    }));
+
+    res.json({ linked: mapped.length > 0, devices: mapped });
+  } catch (e) {
+    next(e);
+  }
+});
+
 app.post('/api/pair/join', async (req, res, next) => {
   try {
     const { code, deviceName } = req.body || {};
@@ -232,14 +254,15 @@ app.get('/api/sync/pull', requireParent, async (req, res, next) => {
     const family = await Db.getFamily(req.family.id);
     if (!family) return res.status(404).json({ error: 'Family not found' });
 
-    const events = await Db.getEventsSince(family.id, since);
+    const events = await Db.getEventsSince(req.family.id, since);
+    const familyDevices = await Db.getDevicesForFamily(req.family.id);
 
     const devices = {};
     const liveStates = {};
     const now = Date.now();
 
-    Object.entries(family.devices || {}).forEach(([id, d]) => {
-      const stale = now - d.lastSeen > 60000;
+    Object.entries(familyDevices).forEach(([id, d]) => {
+      const stale = now - (d.lastSeen || 0) > 60000;
       devices[id] = {
         childId: d.childId,
         deviceName: d.deviceName,
@@ -247,7 +270,7 @@ app.get('/api/sync/pull', requireParent, async (req, res, next) => {
         lastSeen: d.lastSeen,
         online: !stale,
       };
-      const live = family.children[d.childId]?.liveState;
+      const live = family.children?.[d.childId]?.liveState;
       if (live) liveStates[d.childId] = live;
     });
 

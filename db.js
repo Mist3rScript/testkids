@@ -547,6 +547,33 @@ const Db = {
     return db.families[id] || null;
   },
 
+  /** Merge devices from main DB + devices index (reliable on Vercel Blob) */
+  async getDevicesForFamily(familyId) {
+    const db = await readDb();
+    const merged = { ...(db.families[familyId]?.devices || {}) };
+    const store = await readDevicesStore();
+    const now = Date.now();
+    for (const entry of Object.values(store.tokens || {})) {
+      if (entry.familyId !== familyId || !entry.deviceId) continue;
+      const device = entry.device || {
+        id: entry.deviceId,
+        deviceToken: entry.deviceToken,
+        childId: entry.childId,
+        deviceName: entry.deviceName || 'Kid Device',
+        pairedAt: entry.pairedAt || now,
+        lastSeen: entry.lastSeen || now,
+        online: true,
+      };
+      merged[entry.deviceId] = device;
+    }
+    return merged;
+  },
+
+  async getDevicesForChild(familyId, childId) {
+    const all = await this.getDevicesForFamily(familyId);
+    return Object.values(all).filter(d => d.childId === childId);
+  },
+
   async getFamilyByToken(token) {
     if (!token) return null;
 
