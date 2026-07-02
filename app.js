@@ -206,13 +206,17 @@ app.get('/api/sync/rules', async (req, res, next) => {
     const { family, device } = found;
     await Db.updateDeviceSeen(family.id, device.id);
 
-    const freshFamily = await Db.getFamily(family.id);
-    const child = freshFamily?.children?.[device.childId];
+    let snapshot = family.children?.[device.childId]?.snapshot || null;
+    if (!snapshot) {
+      const freshFamily = await Db.getFamily(family.id);
+      snapshot = freshFamily?.children?.[device.childId]?.snapshot || null;
+    }
+
     res.json({
       childId: device.childId,
       familyId: family.id,
-      snapshot: child?.snapshot || null,
-      updatedAt: child?.updatedAt || 0,
+      snapshot,
+      updatedAt: Date.now(),
     });
   } catch (e) {
     next(e);
@@ -242,6 +246,19 @@ app.post('/api/sync/event', async (req, res, next) => {
       });
     }
 
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+app.post('/api/sync/unpair', async (req, res, next) => {
+  try {
+    const { deviceToken } = req.body || {};
+    const found = await Db.getDeviceByToken(deviceToken);
+    if (found) {
+      await Db.removeDevice(found.family.id, found.device.id, found.device.deviceToken);
+    }
     res.json({ ok: true });
   } catch (e) {
     next(e);

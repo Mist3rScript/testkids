@@ -740,6 +740,23 @@ const Db = {
     });
   },
 
+  async removeDevice(familyId, deviceId, deviceToken) {
+    await mutate(db => {
+      const fam = db.families[familyId];
+      if (fam?.devices) delete fam.devices[deviceId];
+    });
+    if (deviceToken) {
+      await mutateDevices(store => {
+        delete store.tokens[deviceToken];
+        for (const [tok, entry] of Object.entries(store.tokens || {})) {
+          if (entry.familyId === familyId && entry.deviceId === deviceId) {
+            delete store.tokens[tok];
+          }
+        }
+      });
+    }
+  },
+
   async getDeviceByToken(token) {
     const entry = await lookupDeviceEntry(token);
     if (entry) {
