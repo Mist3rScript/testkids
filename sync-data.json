@@ -1,0 +1,198 @@
+{
+  "families": {
+    "fam_1783016758624": {
+      "children": {
+        "child_1783016757322": {
+          "snapshot": {
+            "id": "child_1783016757322",
+            "name": "tarek",
+            "age": 7,
+            "avatar": "👦",
+            "color": "blue",
+            "screenTime": {
+              "used": 4,
+              "limit": 150,
+              "bedtimeEnabled": true,
+              "bedtimeTime": "21:00",
+              "breakReminders": true,
+              "paused": false
+            },
+            "shield": {
+              "level": "strict",
+              "enabled": true,
+              "blocked": 2,
+              "safeSearch": true,
+              "incognitoBlock": true
+            },
+            "schedule": {
+              "Mon": {
+                "from": "15:00",
+                "to": "19:00",
+                "enabled": true
+              },
+              "Tue": {
+                "from": "15:00",
+                "to": "19:00",
+                "enabled": true
+              },
+              "Wed": {
+                "from": "15:00",
+                "to": "19:00",
+                "enabled": true
+              },
+              "Thu": {
+                "from": "15:00",
+                "to": "19:00",
+                "enabled": true
+              },
+              "Fri": {
+                "from": "14:00",
+                "to": "20:00",
+                "enabled": true
+              },
+              "Sat": {
+                "from": "10:00",
+                "to": "20:00",
+                "enabled": true
+              },
+              "Sun": {
+                "from": "10:00",
+                "to": "20:00",
+                "enabled": true
+              }
+            },
+            "apps": [],
+            "websiteFilter": {
+              "mode": "blacklist",
+              "whitelist": [],
+              "blacklist": []
+            },
+            "blockedDomains": [
+              {
+                "url": "xxx-site.com",
+                "time": 1783016910343,
+                "child": "tarek"
+              },
+              {
+                "url": "xxx-site.com",
+                "time": 1783016901149,
+                "child": "tarek"
+              },
+              {
+                "url": "xxx-site.com",
+                "time": 1783016884483,
+                "child": "tarek"
+              }
+            ]
+          },
+          "updatedAt": 1783017454314
+        }
+      },
+      "events": [
+        {
+          "id": "evt_1783016910343_61k2gt",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "blocked_site",
+          "url": "xxx-site.com",
+          "time": 1783016910343
+        },
+        {
+          "id": "evt_1783016901149_3aph4n",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "blocked_site",
+          "url": "xxx-site.com",
+          "time": 1783016901149
+        },
+        {
+          "id": "evt_1783016886547_gg84a7",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "screen_time",
+          "minutes": 1,
+          "time": 1783016886547
+        },
+        {
+          "id": "evt_1783016884483_fi3da7",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "blocked_site",
+          "url": "xxx-site.com",
+          "time": 1783016884483
+        },
+        {
+          "id": "evt_1783016883104_3bfiia",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "screen_time",
+          "minutes": 1,
+          "time": 1783016883104
+        },
+        {
+          "id": "evt_1783016814760_zca23w",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "screen_time",
+          "minutes": 1,
+          "time": 1783016814760
+        },
+        {
+          "id": "evt_1783016807284_9pb9ir",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "screen_time",
+          "minutes": 1,
+          "time": 1783016807284
+        },
+        {
+          "id": "evt_1783016805193_c4smq8",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "screen_time",
+          "minutes": 1,
+          "time": 1783016805193
+        },
+        {
+          "id": "evt_1783016791180_jejior",
+          "familyId": "fam_1783016758624",
+          "childId": "child_1783016757322",
+          "deviceId": "device_1783016791162_4c2bvn",
+          "type": "device_online",
+          "isActive": true,
+          "time": 1783016791180
+        }
+      ],
+      "devices": {
+        "device_1783016791162_4c2bvn": {
+          "deviceToken": "token_1783016791162_m0re5e",
+          "childId": "child_1783016757322",
+          "deviceName": "Kid Device",
+          "pairedAt": 1783016791162,
+          "lastSeen": 1783016791162,
+          "online": true
+        }
+      }
+    }
+  },
+  "pairings": {
+    "383793": {
+      "familyId": "fam_1783016758624",
+      "childId": "child_1783016757322",
+      "expiresAt": 1783017679766
+    },
+    "914595": {
+      "familyId": "fam_1783016758624",
+      "childId": "child_1783016757322",
+      "expiresAt": 1783017685174
+    }
+  }
+}
