@@ -1,6 +1,5 @@
 /**
  * Local dev bootstrap — installs deps to .deps/ if node_modules is missing/broken.
- * Production (Docker/Railway) uses normal `npm install` + `node index.js`.
  */
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -23,4 +22,8 @@ if (fs.existsSync(depsDir)) {
   process.env.NODE_PATH = [depsDir, process.env.NODE_PATH].filter(Boolean).join(path.delimiter);
 }
 
-require('./index.js');
+const app = require('./app');
+const PORT = process.env.PORT || 3847;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`KidShield Cloud Server → http://0.0.0.0:${PORT}`);
+});
