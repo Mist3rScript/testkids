@@ -15,10 +15,9 @@ const BLOB_PATH = 'kidshield-cloud.json';
 function blobSetupError() {
   return [
     'Vercel Blob غير مربوط بالمشروع.',
-    '1) Vercel Dashboard → مشروع testkids → Storage → Create → Blob',
-    '2) Connect to Project → اختر testkids',
-    '3) Deployments → Redeploy',
-    '4) تحقق: /api/health يجب blobConfigured=true',
+    '1) Vercel Dashboard → Storage → Blob → Connect to Project',
+    '2) Deployments → Redeploy',
+    '3) /api/health → blobConfigured=true, blobSdkVersion=2.x',
   ].join(' ');
 }
 
@@ -67,24 +66,79 @@ function loadBlobModule() {
   }
 }
 
+function getBlobSdkVersion() {
+  try {
+    const pkgPath = path.join(__dirname, 'node_modules', '@vercel/blob', 'package.json');
+    return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
+  } catch {
+    return null;
+  }
+}
+
+function blobTokenOpts() {
+  const token = process.env.BLOB_READ_WRITE_TOKEN;
+  return token ? { token } : {};
+}
+
 async function streamToText(stream) {
   if (!stream) return '';
   if (typeof stream === 'string') return stream;
   return new Response(stream).text();
 }
 
+async function fetchBlobUrl(url) {
+  const headers = {};
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    headers.Authorization = `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`;
+  }
+  const res = await fetch(url, { headers });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+async function readBlobDbV2(blob) {
+  const result = await blob.get(BLOB_PATH, { access: 'private' });
+  if (!result || result.statusCode !== 200 || !result.stream) return emptyDb();
+  const text = await streamToText(result.stream);
+  if (!text) return emptyDb();
+  return JSON.parse(text);
+}
+
+async function readBlobDbLegacy(blob) {
+  const opts = { ...blobTokenOpts(), prefix: BLOB_PATH, limit: 1 };
+
+  if (typeof blob.list === 'function') {
+    const listed = await blob.list(opts);
+    const item = listed?.blobs?.[0];
+    if (item?.url || item?.downloadUrl) {
+      const data = await fetchBlobUrl(item.downloadUrl || item.url);
+      if (data) return data;
+    }
+  }
+
+  if (typeof blob.head === 'function') {
+    try {
+      const meta = await blob.head(BLOB_PATH, blobTokenOpts());
+      if (meta?.downloadUrl || meta?.url) {
+        const data = await fetchBlobUrl(meta.downloadUrl || meta.url);
+        if (data) return data;
+      }
+    } catch {
+      /* not found */
+    }
+  }
+
+  return emptyDb();
+}
+
 async function readBlobDb() {
   try {
     const blob = loadBlobModule();
-    const { get } = blob;
-    if (typeof get !== 'function') {
-      throw new Error('@vercel/blob too old — need v2.x (npm install @vercel/blob@^2.5.0)');
+    if (typeof blob.get === 'function') {
+      return await readBlobDbV2(blob);
     }
-    const result = await get(BLOB_PATH, { access: 'private' });
-    if (!result || result.statusCode !== 200 || !result.stream) return emptyDb();
-    const text = await streamToText(result.stream);
-    if (!text) return emptyDb();
-    return JSON.parse(text);
+    console.warn('[db] @vercel/blob v1 — using list/head fallback. Upgrade to 2.5.0 on deploy.');
+    return await readBlobDbLegacy(blob);
   } catch (err) {
     if (err?.name === 'BlobNotFoundError') return emptyDb();
     console.error('[db] Blob read failed:', err.message);
@@ -94,12 +148,24 @@ async function readBlobDb() {
 
 async function writeBlobDb(db) {
   try {
-    const { put } = loadBlobModule();
-    await put(BLOB_PATH, JSON.stringify(db), {
-      access: 'private',
+    const blob = loadBlobModule();
+    const body = JSON.stringify(db);
+
+    if (typeof blob.get === 'function') {
+      await blob.put(BLOB_PATH, body, {
+        access: 'private',
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        contentType: 'application/json',
+      });
+      return;
+    }
+
+    await blob.put(BLOB_PATH, body, {
+      access: 'public',
       addRandomSuffix: false,
-      allowOverwrite: true,
       contentType: 'application/json',
+      ...blobTokenOpts(),
     });
   } catch (err) {
     console.error('[db] Blob write failed:', err.message);
@@ -251,3 +317,4 @@ const Db = {
 
 module.exports = Db;
 module.exports.hasBlobStorage = () => HAS_BLOB;
+module.exports.getBlobSdkVersion = getBlobSdkVersion;

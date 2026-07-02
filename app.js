@@ -51,6 +51,12 @@ app.get('/api/health', (req, res) => {
   const blobConfigured = Boolean(
     process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID
   );
+  let blobSdkVersion = null;
+  let blobHasGet = false;
+  try {
+    blobSdkVersion = require('./db').getBlobSdkVersion?.();
+    blobHasGet = typeof require('@vercel/blob').get === 'function';
+  } catch { /* */ }
   res.json({
     ok: true,
     time: Date.now(),
@@ -59,6 +65,8 @@ app.get('/api/health', (req, res) => {
     storage: blobConfigured ? 'blob' : (process.env.VERCEL ? 'none' : 'file'),
     blobConfigured,
     blobStoreId: process.env.BLOB_STORE_ID ? 'set' : 'missing',
+    blobSdkVersion,
+    blobHasGet,
   });
 });
 

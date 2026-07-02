@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "installCommand": "npm install @vercel/blob@2.5.0 && npm install",
   "rewrites": [
     { "source": "/(.*)", "destination": "/" }
   ],
