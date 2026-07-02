@@ -2,20 +2,36 @@ const fs = require('fs');
 const path = require('path');
 
 const IS_VERCEL = Boolean(process.env.VERCEL);
-const USE_BLOB = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+const HAS_BLOB = Boolean(
+  process.env.BLOB_READ_WRITE_TOKEN ||
+  process.env.BLOB_STORE_ID
+);
 const DATA_DIR = process.env.DATA_DIR || (
   IS_VERCEL ? '/tmp/kidshield-data' : path.join(__dirname, 'data')
 );
 const DB_FILE = process.env.DATABASE_PATH || path.join(DATA_DIR, 'kidshield-cloud.json');
 const BLOB_PATH = 'kidshield-cloud.json';
 
-if (!USE_BLOB) {
+function blobSetupError() {
+  return [
+    'Vercel Blob غير مربوط بالمشروع.',
+    '1) Vercel Dashboard → مشروع testkids → Storage → Create → Blob',
+    '2) Connect to Project → اختر testkids',
+    '3) Deployments → Redeploy',
+    '4) تحقق: /api/health يجب blobConfigured=true',
+  ].join(' ');
+}
+
+function ensureDataDir() {
+  if (HAS_BLOB) return;
   try {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   } catch (err) {
     console.warn('[db] Could not create DATA_DIR:', err.message);
   }
 }
+
+ensureDataDir();
 
 function emptyDb() {
   return { families: {}, pairings: {}, events: {} };
@@ -31,63 +47,75 @@ function readFileDb() {
 }
 
 function writeFileDb(db) {
+  if (IS_VERCEL && !HAS_BLOB) {
+    throw new Error(blobSetupError());
+  }
+  ensureDataDir();
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
   } catch (err) {
     console.error('[db] File write failed:', err.message);
-    throw new Error(IS_VERCEL && !USE_BLOB
-      ? 'Storage not configured — add Vercel Blob in dashboard (Storage → Blob)'
-      : 'Database write failed');
+    throw new Error(IS_VERCEL ? blobSetupError() : 'Database write failed');
   }
 }
 
 function loadBlobModule() {
   try {
     return require('@vercel/blob');
-  } catch (err) {
-    throw new Error('@vercel/blob not installed — run npm install in server/');
+  } catch {
+    throw new Error('@vercel/blob missing — run npm install in server/');
   }
+}
+
+async function streamToText(stream) {
+  if (!stream) return '';
+  if (typeof stream === 'string') return stream;
+  const chunks = [];
+  for await (const chunk of stream) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 async function readBlobDb() {
   try {
-    const { head } = loadBlobModule();
-    const token = process.env.BLOB_READ_WRITE_TOKEN;
-    let meta;
-    try {
-      meta = await head(BLOB_PATH, { token });
-    } catch {
+    const { get } = loadBlobModule();
+    const result = await get(BLOB_PATH, { access: 'private' });
+    if (!result || result.statusCode === 404) return emptyDb();
+    if (result.statusCode !== 200) return emptyDb();
+    const text = await streamToText(result.stream);
+    if (!text) return emptyDb();
+    return JSON.parse(text);
+  } catch (err) {
+    if (err?.message?.includes('does not exist') || err?.name === 'BlobNotFoundError') {
       return emptyDb();
     }
-    if (!meta?.url) return emptyDb();
-    const res = await fetch(meta.url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return emptyDb();
-    return await res.json();
-  } catch (err) {
     console.error('[db] Blob read failed:', err.message);
-    return emptyDb();
+    throw new Error(`Blob read failed: ${err.message}`);
   }
 }
 
 async function writeBlobDb(db) {
-  const { put } = loadBlobModule();
-  await put(BLOB_PATH, JSON.stringify(db), {
-    access: 'private',
-    addRandomSuffix: false,
-    token: process.env.BLOB_READ_WRITE_TOKEN,
-  });
+  try {
+    const { put } = loadBlobModule();
+    await put(BLOB_PATH, JSON.stringify(db), {
+      access: 'private',
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: 'application/json',
+    });
+  } catch (err) {
+    console.error('[db] Blob write failed:', err.message);
+    throw new Error(`Blob write failed: ${err.message}. ${blobSetupError()}`);
+  }
 }
 
 async function readDb() {
-  if (USE_BLOB) return readBlobDb();
+  if (HAS_BLOB) return readBlobDb();
   if (!fileCache) fileCache = readFileDb();
   return fileCache;
 }
 
 async function writeDb(db) {
-  if (USE_BLOB) {
+  if (HAS_BLOB) {
     await writeBlobDb(db);
     return;
   }
@@ -223,3 +251,4 @@ const Db = {
 };
 
 module.exports = Db;
+module.exports.hasBlobStorage = () => HAS_BLOB;

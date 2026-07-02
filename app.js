@@ -48,13 +48,17 @@ app.get('/', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
+  const blobConfigured = Boolean(
+    process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID
+  );
   res.json({
     ok: true,
     time: Date.now(),
     env: process.env.NODE_ENV || 'development',
     platform: process.env.VERCEL ? 'vercel' : 'node',
-    storage: process.env.BLOB_READ_WRITE_TOKEN ? 'blob' : (process.env.VERCEL ? 'tmp' : 'file'),
-    blobConfigured: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
+    storage: blobConfigured ? 'blob' : (process.env.VERCEL ? 'none' : 'file'),
+    blobConfigured,
+    blobStoreId: process.env.BLOB_STORE_ID ? 'set' : 'missing',
   });
 });
 
