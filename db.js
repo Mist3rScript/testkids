@@ -13,8 +13,10 @@ const DB_FILE = process.env.DATABASE_PATH || path.join(DATA_DIR, 'kidshield-clou
 const BLOB_PATH = 'kidshield-cloud.json';
 const PAIRINGS_BLOB_PATH = 'kidshield-pairings.json';
 const AUTH_BLOB_PATH = 'kidshield-auth.json';
+const DEVICES_BLOB_PATH = 'kidshield-devices.json';
 const PAIRINGS_FILE = path.join(DATA_DIR, 'kidshield-pairings.json');
 const AUTH_FILE = path.join(DATA_DIR, 'kidshield-auth.json');
+const DEVICES_FILE = path.join(DATA_DIR, 'kidshield-devices.json');
 
 function blobSetupError() {
   return [
@@ -43,16 +45,22 @@ function emptyDb() {
 let fileCache = null;
 let pairingsFileCache = null;
 let authFileCache = null;
+let devicesFileCache = null;
 /** Warm cache — same Vercel lambda instance can read what it just wrote */
 let warmDb = null;
 let warmPairings = null;
 let warmAuth = null;
+let warmDevices = null;
 
 function emptyPairingsStore() {
   return { pairings: {}, _version: 0 };
 }
 
 function emptyAuthStore() {
+  return { tokens: {}, _version: 0 };
+}
+
+function emptyDevicesStore() {
   return { tokens: {}, _version: 0 };
 }
 
@@ -376,6 +384,94 @@ async function writeAuthStore(store) {
   await writeBlobJson(AUTH_BLOB_PATH, store);
 }
 
+function readDevicesFileLocal() {
+  try {
+    if (fs.existsSync(DEVICES_FILE)) return JSON.parse(fs.readFileSync(DEVICES_FILE, 'utf8'));
+  } catch { /* */ }
+  return emptyDevicesStore();
+}
+
+function writeDevicesFileLocal(store) {
+  ensureDataDir();
+  fs.writeFileSync(DEVICES_FILE, JSON.stringify(store, null, 2));
+}
+
+async function readDevicesStore() {
+  if (!HAS_BLOB) {
+    if (!devicesFileCache) devicesFileCache = readDevicesFileLocal();
+    return JSON.parse(JSON.stringify(devicesFileCache));
+  }
+  const store = await readBlobJson(DEVICES_BLOB_PATH, emptyDevicesStore);
+  warmDevices = store;
+  return JSON.parse(JSON.stringify(store));
+}
+
+async function writeDevicesStore(store) {
+  warmDevices = store;
+  if (!HAS_BLOB) {
+    devicesFileCache = store;
+    writeDevicesFileLocal(store);
+    return;
+  }
+  await writeBlobJson(DEVICES_BLOB_PATH, store);
+}
+
+async function mutateDevices(fn, maxRetries = 10) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const store = await readDevicesStore();
+    const result = await fn(store);
+    try {
+      store._version = (store._version || 0) + 1;
+      await writeDevicesStore(store);
+      return result;
+    } catch (err) {
+      if (isRetryableWriteError(err) && attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Devices store busy — retry');
+}
+
+function buildDeviceLookup(entry, token) {
+  if (!entry) return null;
+  const device = entry.device || {
+    id: entry.deviceId,
+    deviceToken: token,
+    childId: entry.childId,
+    deviceName: entry.deviceName || 'Kid Device',
+    pairedAt: entry.pairedAt || Date.now(),
+    lastSeen: entry.lastSeen || Date.now(),
+    online: true,
+  };
+  const family = {
+    id: entry.familyId,
+    devices: { [entry.deviceId]: device },
+    children: {
+      [entry.childId]: {
+        snapshot: entry.snapshot || null,
+        liveState: null,
+        updatedAt: Date.now(),
+      },
+    },
+  };
+  return { family, device };
+}
+
+async function lookupDeviceEntry(token) {
+  if (!token) return null;
+  if (warmDevices?.tokens?.[token]) return warmDevices.tokens[token];
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const store = await readDevicesStore();
+    if (store.tokens?.[token]) return store.tokens[token];
+    if (attempt < 3) await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+  }
+  return null;
+}
+
 async function mutateAuth(fn, maxRetries = 10) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const store = await readAuthStore();
@@ -416,12 +512,20 @@ async function mutatePairings(fn, maxRetries = 10) {
 }
 
 async function lookupPairing(normalized) {
-  const store = await readPairingsStore();
-  cleanExpiredInStore(store);
-  if (store.pairings[normalized]) return store.pairings[normalized];
-  const db = await readDb();
-  cleanExpiredPairings(db);
-  return db.pairings[normalized] || null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (warmPairings?.pairings?.[normalized]) {
+      const p = warmPairings.pairings[normalized];
+      if (p.expiresAt > Date.now()) return p;
+    }
+    const store = await readPairingsStore();
+    cleanExpiredInStore(store);
+    if (store.pairings[normalized]) return store.pairings[normalized];
+    const db = await readDb();
+    cleanExpiredPairings(db);
+    if (db.pairings[normalized]) return db.pairings[normalized];
+    if (attempt < 3) await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
+  }
+  return null;
 }
 
 async function readDb() {
@@ -546,6 +650,26 @@ const Db = {
       await mutatePairings(store => {
         delete store.pairings[normalized];
       });
+      await mutateDevices(store => {
+        store.tokens[result.deviceToken] = {
+          familyId: result.familyId,
+          deviceId: result.deviceId,
+          childId: result.childId,
+          deviceName: deviceName || 'Kid Device',
+          pairedAt: now,
+          lastSeen: now,
+          snapshot: result.snapshot,
+          device: {
+            id: result.deviceId,
+            deviceToken: result.deviceToken,
+            childId: result.childId,
+            deviceName: deviceName || 'Kid Device',
+            pairedAt: now,
+            lastSeen: now,
+            online: true,
+          },
+        };
+      });
     }
 
     return result;
@@ -590,8 +714,14 @@ const Db = {
   },
 
   async getDeviceByToken(token) {
+    const entry = await lookupDeviceEntry(token);
+    if (entry) {
+      const fromIndex = buildDeviceLookup(entry, token);
+      if (fromIndex) return fromIndex;
+    }
+
     const db = await readDb();
-    for (const fam of Object.values(db.families)) {
+    for (const fam of Object.values(db.families || {})) {
       for (const d of Object.values(fam.devices || {})) {
         if (d.deviceToken === token) return { family: fam, device: d };
       }
@@ -600,9 +730,17 @@ const Db = {
   },
 
   async updateDeviceSeen(familyId, deviceId) {
-    return mutate(db => {
+    await mutate(db => {
       const d = db.families[familyId]?.devices?.[deviceId];
       if (d) d.lastSeen = Date.now();
+    });
+    await mutateDevices(store => {
+      for (const entry of Object.values(store.tokens || {})) {
+        if (entry.familyId === familyId && entry.deviceId === deviceId) {
+          entry.lastSeen = Date.now();
+          if (entry.device) entry.device.lastSeen = Date.now();
+        }
+      }
     });
   },
 
