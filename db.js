@@ -70,24 +70,23 @@ function loadBlobModule() {
 async function streamToText(stream) {
   if (!stream) return '';
   if (typeof stream === 'string') return stream;
-  const chunks = [];
-  for await (const chunk of stream) chunks.push(chunk);
-  return Buffer.concat(chunks).toString('utf8');
+  return new Response(stream).text();
 }
 
 async function readBlobDb() {
   try {
-    const { get } = loadBlobModule();
+    const blob = loadBlobModule();
+    const { get } = blob;
+    if (typeof get !== 'function') {
+      throw new Error('@vercel/blob too old — need v2.x (npm install @vercel/blob@^2.5.0)');
+    }
     const result = await get(BLOB_PATH, { access: 'private' });
-    if (!result || result.statusCode === 404) return emptyDb();
-    if (result.statusCode !== 200) return emptyDb();
+    if (!result || result.statusCode !== 200 || !result.stream) return emptyDb();
     const text = await streamToText(result.stream);
     if (!text) return emptyDb();
     return JSON.parse(text);
   } catch (err) {
-    if (err?.message?.includes('does not exist') || err?.name === 'BlobNotFoundError') {
-      return emptyDb();
-    }
+    if (err?.name === 'BlobNotFoundError') return emptyDb();
     console.error('[db] Blob read failed:', err.message);
     throw new Error(`Blob read failed: ${err.message}`);
   }
