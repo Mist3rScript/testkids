@@ -1,0 +1,66 @@
+{
+  "families": {
+    "test": {
+      "id": "test",
+      "parentToken": "pt_test",
+      "parentName": "T",
+      "createdAt": 1783023645337,
+      "children": {},
+      "devices": {}
+    },
+    "fam_test": {
+      "id": "fam_test",
+      "parentToken": "pt_test123",
+      "parentName": "Test",
+      "createdAt": 1783026877363,
+      "children": {
+        "child_1": {
+          "snapshot": {
+            "id": "child_1",
+            "name": "Adam"
+          },
+          "liveState": null,
+          "updatedAt": 1783026877367
+        }
+      },
+      "devices": {
+        "dev1": {
+          "id": "dev1",
+          "deviceToken": "dt1",
+          "childId": "child_1",
+          "deviceName": "Phone",
+          "pairedAt": 1783026877377,
+          "lastSeen": 1783026877377,
+          "online": true
+        }
+      }
+    },
+    "f1": {
+      "id": "f1",
+      "parentToken": "pt1",
+      "parentName": "P",
+      "createdAt": 1783029700339,
+      "children": {},
+      "devices": {}
+    },
+    "fam_local": {
+      "id": "fam_local",
+      "parentToken": "pt_test123",
+      "parentName": "Local",
+      "createdAt": 1783030445323,
+      "children": {},
+      "devices": {}
+    },
+    "fam_t2": {
+      "id": "fam_t2",
+      "parentToken": "pt_t2",
+      "parentName": "T2",
+      "createdAt": 1783030511603,
+      "children": {},
+      "devices": {}
+    }
+  },
+  "pairings": {},
+  "events": {},
+  "_version": 3
+}

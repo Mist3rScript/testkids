@@ -47,15 +47,17 @@ app.get('/', (req, res) => {
   });
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   const blobConfigured = Boolean(
     process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID
   );
   let blobSdkVersion = null;
   let blobHasGet = false;
+  let stats = null;
   try {
     blobSdkVersion = require('./db').getBlobSdkVersion?.();
     blobHasGet = typeof require('@vercel/blob').get === 'function';
+    stats = await Db.getStats();
   } catch { /* */ }
   res.json({
     ok: true,
@@ -67,6 +69,7 @@ app.get('/api/health', (req, res) => {
     blobStoreId: process.env.BLOB_STORE_ID ? 'set' : 'missing',
     blobSdkVersion,
     blobHasGet,
+    ...stats,
   });
 });
 

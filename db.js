@@ -11,6 +11,10 @@ const DATA_DIR = process.env.DATA_DIR || (
 );
 const DB_FILE = process.env.DATABASE_PATH || path.join(DATA_DIR, 'kidshield-cloud.json');
 const BLOB_PATH = 'kidshield-cloud.json';
+const PAIRINGS_BLOB_PATH = 'kidshield-pairings.json';
+const AUTH_BLOB_PATH = 'kidshield-auth.json';
+const PAIRINGS_FILE = path.join(DATA_DIR, 'kidshield-pairings.json');
+const AUTH_FILE = path.join(DATA_DIR, 'kidshield-auth.json');
 
 function blobSetupError() {
   return [
@@ -37,6 +41,89 @@ function emptyDb() {
 }
 
 let fileCache = null;
+let pairingsFileCache = null;
+let authFileCache = null;
+/** Warm cache — same Vercel lambda instance can read what it just wrote */
+let warmDb = null;
+let warmPairings = null;
+let warmAuth = null;
+
+function emptyPairingsStore() {
+  return { pairings: {}, _version: 0 };
+}
+
+function emptyAuthStore() {
+  return { tokens: {}, _version: 0 };
+}
+
+function blobPutOpts() {
+  return {
+    access: 'private',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: 'application/json',
+    ...blobTokenOpts(),
+  };
+}
+
+async function readBlobJson(pathname, emptyFn) {
+  if (!HAS_BLOB) return emptyFn();
+
+  const blob = loadBlobModule();
+  const getOpts = { access: 'private', ...blobTokenOpts() };
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      if (typeof blob.get === 'function') {
+        let result;
+        try {
+          result = await blob.get(pathname, getOpts);
+        } catch (err) {
+          if (err?.name === 'BlobNotFoundError') return emptyFn();
+          throw err;
+        }
+        if (!result || result.statusCode === 404) {
+          if (attempt < 3) {
+            await new Promise(r => setTimeout(r, 80 * (attempt + 1)));
+            continue;
+          }
+          return emptyFn();
+        }
+        if (result.statusCode !== 200 || !result.stream) return emptyFn();
+        const text = await streamToText(result.stream);
+        try {
+          return text ? JSON.parse(text) : emptyFn();
+        } catch {
+          console.warn('[db] Corrupt blob JSON at', pathname);
+          return emptyFn();
+        }
+      }
+
+      if (typeof blob.head === 'function') {
+        try {
+          const meta = await blob.head(pathname, blobTokenOpts());
+          if (meta?.downloadUrl || meta?.url) {
+            const data = await fetchBlobUrl(meta.downloadUrl || meta.url);
+            if (data) return data;
+          }
+        } catch (err) {
+          if (err?.name !== 'BlobNotFoundError' && attempt === 3) throw err;
+        }
+      }
+    } catch (err) {
+      if (err?.name === 'BlobNotFoundError') return emptyFn();
+      if (attempt === 3) throw err;
+      await new Promise(r => setTimeout(r, 80 * (attempt + 1)));
+    }
+  }
+  return emptyFn();
+}
+
+async function writeBlobJson(pathname, data) {
+  if (!HAS_BLOB) return;
+  const blob = loadBlobModule();
+  await blob.put(pathname, JSON.stringify(data), blobPutOpts());
+}
 
 function readFileDb() {
   try {
@@ -137,38 +224,17 @@ async function readBlobDbLegacy(blob) {
 async function readDbWithMeta() {
   if (!HAS_BLOB) {
     if (!fileCache) fileCache = readFileDb();
-    return { db: JSON.parse(JSON.stringify(fileCache)), etag: null };
+    const db = JSON.parse(JSON.stringify(fileCache));
+    warmDb = db;
+    return { db, etag: null };
   }
 
   try {
-    const blob = loadBlobModule();
-    if (typeof blob.get === 'function') {
-      let result;
-      try {
-        result = await blob.get(BLOB_PATH, { access: 'private' });
-      } catch (err) {
-        if (err?.name === 'BlobNotFoundError') return { db: emptyDb(), etag: null };
-        throw err;
-      }
-      if (!result || result.statusCode === 404) {
-        return { db: emptyDb(), etag: null };
-      }
-      if (result.statusCode !== 200 || !result.stream) {
-        return { db: emptyDb(), etag: null };
-      }
-      const text = await streamToText(result.stream);
-      try {
-        return {
-          db: text ? JSON.parse(text) : emptyDb(),
-          etag: result.blob?.etag || null,
-        };
-      } catch {
-        console.warn('[db] Corrupt blob JSON — resetting store');
-        return { db: emptyDb(), etag: null };
-      }
-    }
-    return await readBlobDbLegacy(blob);
+    const data = await readBlobJson(BLOB_PATH, emptyDb);
+    warmDb = data;
+    return { db: JSON.parse(JSON.stringify(data)), etag: null };
   } catch (err) {
+    if (warmDb) return { db: JSON.parse(JSON.stringify(warmDb)), etag: null };
     if (err?.name === 'BlobNotFoundError') return { db: emptyDb(), etag: null };
     console.error('[db] Blob read failed:', err.message);
     throw new Error(`Blob read failed: ${err.message}`);
@@ -176,30 +242,11 @@ async function readDbWithMeta() {
 }
 
 async function writeDbWithMeta(db) {
+  warmDb = db;
   if (HAS_BLOB) {
-    const blob = loadBlobModule();
-    const body = JSON.stringify(db);
-    const putOpts = {
-      access: 'private',
-      addRandomSuffix: false,
-      allowOverwrite: true,
-      contentType: 'application/json',
-    };
-
-    if (typeof blob.get === 'function') {
-      await blob.put(BLOB_PATH, body, putOpts);
-      return;
-    }
-
-    await blob.put(BLOB_PATH, body, {
-      access: 'public',
-      addRandomSuffix: false,
-      contentType: 'application/json',
-      ...blobTokenOpts(),
-    });
+    await writeBlobJson(BLOB_PATH, db);
     return;
   }
-
   fileCache = db;
   writeFileDb(db);
 }
@@ -258,6 +305,125 @@ async function mutate(fn, maxRetries = 10) {
   throw new Error('Database busy — retry');
 }
 
+function readPairingsFileLocal() {
+  try {
+    if (fs.existsSync(PAIRINGS_FILE)) return JSON.parse(fs.readFileSync(PAIRINGS_FILE, 'utf8'));
+  } catch { /* */ }
+  return emptyPairingsStore();
+}
+
+function writePairingsFileLocal(store) {
+  ensureDataDir();
+  fs.writeFileSync(PAIRINGS_FILE, JSON.stringify(store, null, 2));
+}
+
+function cleanExpiredInStore(store) {
+  const now = Date.now();
+  Object.keys(store.pairings || {}).forEach(code => {
+    if (store.pairings[code].expiresAt < now) delete store.pairings[code];
+  });
+}
+
+async function readPairingsStore() {
+  if (!HAS_BLOB) {
+    if (!pairingsFileCache) pairingsFileCache = readPairingsFileLocal();
+    return JSON.parse(JSON.stringify(pairingsFileCache));
+  }
+  const store = await readBlobJson(PAIRINGS_BLOB_PATH, emptyPairingsStore);
+  warmPairings = store;
+  return JSON.parse(JSON.stringify(store));
+}
+
+async function writePairingsStore(store) {
+  warmPairings = store;
+  if (!HAS_BLOB) {
+    pairingsFileCache = store;
+    writePairingsFileLocal(store);
+    return;
+  }
+  await writeBlobJson(PAIRINGS_BLOB_PATH, store);
+}
+
+function readAuthFileLocal() {
+  try {
+    if (fs.existsSync(AUTH_FILE)) return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf8'));
+  } catch { /* */ }
+  return emptyAuthStore();
+}
+
+function writeAuthFileLocal(store) {
+  ensureDataDir();
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(store, null, 2));
+}
+
+async function readAuthStore() {
+  if (!HAS_BLOB) {
+    if (!authFileCache) authFileCache = readAuthFileLocal();
+    return JSON.parse(JSON.stringify(authFileCache));
+  }
+  const store = await readBlobJson(AUTH_BLOB_PATH, emptyAuthStore);
+  warmAuth = store;
+  return JSON.parse(JSON.stringify(store));
+}
+
+async function writeAuthStore(store) {
+  warmAuth = store;
+  if (!HAS_BLOB) {
+    authFileCache = store;
+    writeAuthFileLocal(store);
+    return;
+  }
+  await writeBlobJson(AUTH_BLOB_PATH, store);
+}
+
+async function mutateAuth(fn, maxRetries = 10) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const store = await readAuthStore();
+    const result = await fn(store);
+    try {
+      store._version = (store._version || 0) + 1;
+      await writeAuthStore(store);
+      return result;
+    } catch (err) {
+      if (isRetryableWriteError(err) && attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Auth store busy — retry');
+}
+
+async function mutatePairings(fn, maxRetries = 10) {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const store = await readPairingsStore();
+    cleanExpiredInStore(store);
+    const result = await fn(store);
+    try {
+      store._version = (store._version || 0) + 1;
+      await writePairingsStore(store);
+      return result;
+    } catch (err) {
+      if (isRetryableWriteError(err) && attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Pairings store busy — retry');
+}
+
+async function lookupPairing(normalized) {
+  const store = await readPairingsStore();
+  cleanExpiredInStore(store);
+  if (store.pairings[normalized]) return store.pairings[normalized];
+  const db = await readDb();
+  cleanExpiredPairings(db);
+  return db.pairings[normalized] || null;
+}
+
 async function readDb() {
   const { db } = await readDbWithMeta();
   return db;
@@ -278,12 +444,28 @@ const Db = {
   },
 
   async getFamilyByToken(token) {
+    if (!token) return null;
+
+    if (warmDb?.families) {
+      const warmHit = Object.values(warmDb.families).find(f => f.parentToken === token);
+      if (warmHit) return warmHit;
+    }
+
+    try {
+      const auth = await readAuthStore();
+      const familyId = auth.tokens?.[token];
+      if (familyId) {
+        const db = await readDb();
+        if (db.families?.[familyId]) return db.families[familyId];
+      }
+    } catch { /* fallback below */ }
+
     const db = await readDb();
-    return Object.values(db.families).find(f => f.parentToken === token) || null;
+    return Object.values(db.families || {}).find(f => f.parentToken === token) || null;
   },
 
   async createFamily({ id, parentToken, parentName }) {
-    return mutate(db => {
+    const family = await mutate(db => {
       db.families[id] = {
         id,
         parentToken,
@@ -294,21 +476,30 @@ const Db = {
       };
       return db.families[id];
     });
+
+    await mutateAuth(store => {
+      store.tokens[parentToken] = id;
+    });
+
+    return family;
   },
 
   async createPairingCode(familyId, childId, snapshot, ttlMs, genCodeFn) {
-    return mutate(db => {
+    await mutate(db => {
       const fam = db.families[familyId];
       if (!fam) throw new Error('Family not found');
+      fam.children[childId] = { snapshot, liveState: null, updatedAt: Date.now() };
+    });
+
+    return mutatePairings(store => {
       const now = Date.now();
-      fam.children[childId] = { snapshot, liveState: null, updatedAt: now };
       let code;
       let tries = 0;
       do {
         code = genCodeFn();
         tries += 1;
-      } while (db.pairings[code] && tries < 30);
-      db.pairings[code] = { familyId, childId, expiresAt: now + ttlMs };
+      } while (store.pairings[code] && tries < 30);
+      store.pairings[code] = { familyId, childId, expiresAt: now + ttlMs };
       return code;
     });
   },
@@ -319,12 +510,13 @@ const Db = {
       return { ok: false, reason: 'invalid_format' };
     }
 
-    return mutate(db => {
-      const pairing = db.pairings[normalized];
-      const now = Date.now();
-      if (!pairing || pairing.expiresAt < now) {
-        return { ok: false, reason: 'invalid_or_expired' };
-      }
+    const pairing = await lookupPairing(normalized);
+    const now = Date.now();
+    if (!pairing || pairing.expiresAt < now) {
+      return { ok: false, reason: 'invalid_or_expired' };
+    }
+
+    const result = await mutate(db => {
       const fam = db.families[pairing.familyId];
       const child = fam?.children?.[pairing.childId];
       if (!child) return { ok: false, reason: 'no_child' };
@@ -339,7 +531,6 @@ const Db = {
         lastSeen: now,
         online: true,
       };
-      delete db.pairings[normalized];
 
       return {
         ok: true,
@@ -350,6 +541,14 @@ const Db = {
         snapshot: child.snapshot,
       };
     });
+
+    if (result.ok) {
+      await mutatePairings(store => {
+        delete store.pairings[normalized];
+      });
+    }
+
+    return result;
   },
 
   async upsertChild(familyId, childId, snapshot) {
@@ -444,9 +643,20 @@ const Db = {
   },
 
   async getPairing(code) {
+    return lookupPairing(normalizePairCode(code));
+  },
+
+  async getStats() {
     const db = await readDb();
+    const pairings = await readPairingsStore();
+    const auth = await readAuthStore();
     cleanExpiredPairings(db);
-    return db.pairings[normalizePairCode(code)] || db.pairings[String(code)] || null;
+    cleanExpiredInStore(pairings);
+    return {
+      familyCount: Object.keys(db.families || {}).length,
+      pairingCount: Object.keys(pairings.pairings || {}).length,
+      tokenCount: Object.keys(auth.tokens || {}).length,
+    };
   },
 };
 
