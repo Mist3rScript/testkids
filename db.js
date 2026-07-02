@@ -376,6 +376,35 @@ const Db = {
     const db = await readDb();
     return (db.events[familyId] || []).filter(e => e.time > since);
   },
+
+  /** @deprecated — use mutate / createPairingCode; kept for older deploys */
+  async cleanPairings() {
+    return mutate(db => { cleanExpiredPairings(db); });
+  },
+
+  async addPairing(code, familyId, childId, expiresAt) {
+    return mutate(db => {
+      db.pairings[String(code)] = { familyId, childId, expiresAt };
+    });
+  },
+
+  async deletePairing(code) {
+    return mutate(db => {
+      delete db.pairings[String(code)];
+    });
+  },
+
+  async hasPairing(code) {
+    const db = await readDb();
+    cleanExpiredPairings(db);
+    return Boolean(db.pairings[String(code)]);
+  },
+
+  async getPairing(code) {
+    const db = await readDb();
+    cleanExpiredPairings(db);
+    return db.pairings[normalizePairCode(code)] || db.pairings[String(code)] || null;
+  },
 };
 
 module.exports = Db;
