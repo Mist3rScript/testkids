@@ -137,21 +137,35 @@ async function readBlobDbLegacy(blob) {
 async function readDbWithMeta() {
   if (!HAS_BLOB) {
     if (!fileCache) fileCache = readFileDb();
-    return { db: structuredClone(fileCache), etag: null };
+    return { db: JSON.parse(JSON.stringify(fileCache)), etag: null };
   }
 
   try {
     const blob = loadBlobModule();
     if (typeof blob.get === 'function') {
-      const result = await blob.get(BLOB_PATH, { access: 'private' });
-      if (!result || result.statusCode !== 200 || !result.stream) {
+      let result;
+      try {
+        result = await blob.get(BLOB_PATH, { access: 'private' });
+      } catch (err) {
+        if (err?.name === 'BlobNotFoundError') return { db: emptyDb(), etag: null };
+        throw err;
+      }
+      if (!result || result.statusCode === 404) {
+        return { db: emptyDb(), etag: null };
+      }
+      if (result.statusCode !== 200 || !result.stream) {
         return { db: emptyDb(), etag: null };
       }
       const text = await streamToText(result.stream);
-      return {
-        db: text ? JSON.parse(text) : emptyDb(),
-        etag: result.blob?.etag || null,
-      };
+      try {
+        return {
+          db: text ? JSON.parse(text) : emptyDb(),
+          etag: result.blob?.etag || null,
+        };
+      } catch {
+        console.warn('[db] Corrupt blob JSON — resetting store');
+        return { db: emptyDb(), etag: null };
+      }
     }
     return await readBlobDbLegacy(blob);
   } catch (err) {
@@ -161,7 +175,7 @@ async function readDbWithMeta() {
   }
 }
 
-async function writeDbWithMeta(db, etag) {
+async function writeDbWithMeta(db) {
   if (HAS_BLOB) {
     const blob = loadBlobModule();
     const body = JSON.stringify(db);
@@ -173,7 +187,6 @@ async function writeDbWithMeta(db, etag) {
     };
 
     if (typeof blob.get === 'function') {
-      if (etag) putOpts.ifMatch = etag;
       await blob.put(BLOB_PATH, body, putOpts);
       return;
     }
@@ -191,22 +204,52 @@ async function writeDbWithMeta(db, etag) {
   writeFileDb(db);
 }
 
-function isPreconditionError(err) {
+function isRetryableWriteError(err) {
+  const msg = String(err?.message || '');
   return err?.name === 'BlobPreconditionFailedError' ||
-    String(err?.message || '').includes('Precondition');
+    msg.includes('Precondition') ||
+    msg.includes('ETag mismatch') ||
+    msg.includes('conflict');
 }
 
-async function mutate(fn, maxRetries = 8) {
+/** Merge pairings/devices from fresher blob so concurrent writes don't drop codes */
+function mergeConcurrentState(target, fresh) {
+  if (!fresh) return;
+  const now = Date.now();
+  Object.entries(fresh.pairings || {}).forEach(([code, p]) => {
+    if (p.expiresAt > now && !target.pairings[code]) {
+      target.pairings[code] = p;
+    }
+  });
+  Object.entries(fresh.families || {}).forEach(([famId, fam]) => {
+    if (!target.families[famId]) {
+      target.families[famId] = fam;
+      return;
+    }
+    const tFam = target.families[famId];
+    Object.entries(fam.devices || {}).forEach(([devId, dev]) => {
+      if (!tFam.devices[devId]) tFam.devices[devId] = dev;
+    });
+    Object.entries(fam.children || {}).forEach(([childId, child]) => {
+      if (!tFam.children[childId]) tFam.children[childId] = child;
+    });
+  });
+}
+
+async function mutate(fn, maxRetries = 10) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const { db, etag } = await readDbWithMeta();
+    const { db } = await readDbWithMeta();
     cleanExpiredPairings(db);
     const result = await fn(db);
     try {
-      await writeDbWithMeta(db, etag);
+      const { db: fresh } = await readDbWithMeta();
+      mergeConcurrentState(db, fresh);
+      db._version = Math.max(db._version || 0, fresh._version || 0) + 1;
+      await writeDbWithMeta(db);
       return result;
     } catch (err) {
-      if (isPreconditionError(err) && attempt < maxRetries - 1) {
-        await new Promise(r => setTimeout(r, 40 * (attempt + 1)));
+      if (isRetryableWriteError(err) && attempt < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, 50 * (attempt + 1)));
         continue;
       }
       throw err;
@@ -221,7 +264,7 @@ async function readDb() {
 }
 
 async function writeDb(db) {
-  await writeDbWithMeta(db, null);
+  await writeDbWithMeta(db);
 }
 
 const Db = {
