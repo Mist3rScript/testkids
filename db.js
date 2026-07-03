@@ -38,6 +38,49 @@ function ensureDataDir() {
 
 ensureDataDir();
 
+function normalizeChildSnapshot(raw) {
+  const base = raw && typeof raw === 'object' ? raw : {};
+  const st = base.screenTime || {};
+  const starterApps = [
+    { name: 'YouTube', icon: '📺', category: 'entertainment', blocked: false, usage: 0 },
+    { name: 'Chrome', icon: '🌐', category: 'browser', blocked: false, usage: 0 },
+    { name: 'Roblox', icon: '🎮', category: 'gaming', blocked: false, usage: 0 },
+    { name: 'Khan Academy', icon: '📚', category: 'education', blocked: false, usage: 0 },
+  ];
+  return {
+    id: base.id || 'child',
+    name: base.name || 'Child',
+    age: base.age || 8,
+    avatar: base.avatar || '👶',
+    color: base.color || 'blue',
+    parentPin: base.parentPin || '1234',
+    screenTime: {
+      used: 0,
+      limit: 120,
+      bedtimeEnabled: false,
+      bedtimeTime: '21:00',
+      wakeTime: '07:00',
+      scheduleEnabled: false,
+      breakReminders: true,
+      paused: false,
+      ...st,
+    },
+    shield: {
+      level: 'strict',
+      enabled: true,
+      blocked: 0,
+      safeSearch: true,
+      incognitoBlock: true,
+      ...(base.shield || {}),
+    },
+    schedule: base.schedule || {},
+    apps: Array.isArray(base.apps) && base.apps.length ? base.apps : starterApps,
+    websiteFilter: base.websiteFilter || { mode: 'blacklist', whitelist: [], blacklist: [] },
+    shieldCategories: base.shieldCategories || [],
+    blockedDomains: base.blockedDomains || [],
+  };
+}
+
 function emptyDb() {
   return { families: {}, pairings: {}, events: {} };
 }
@@ -616,10 +659,11 @@ const Db = {
   },
 
   async createPairingCode(familyId, childId, snapshot, ttlMs, genCodeFn) {
+    const normalized = normalizeChildSnapshot({ ...snapshot, id: childId });
     await mutate(db => {
       const fam = db.families[familyId];
       if (!fam) throw new Error('Family not found');
-      fam.children[childId] = { snapshot, liveState: null, updatedAt: Date.now() };
+      fam.children[childId] = { snapshot: normalized, liveState: null, updatedAt: Date.now() };
     });
 
     return mutatePairings(store => {
@@ -669,7 +713,7 @@ const Db = {
         deviceToken,
         familyId: pairing.familyId,
         childId: pairing.childId,
-        snapshot: child.snapshot,
+        snapshot: normalizeChildSnapshot(child.snapshot),
       };
     });
 
@@ -703,10 +747,11 @@ const Db = {
   },
 
   async upsertChild(familyId, childId, snapshot) {
+    const normalized = normalizeChildSnapshot({ ...snapshot, id: childId });
     return mutate(db => {
       const fam = db.families[familyId];
       if (!fam) return;
-      fam.children[childId] = { snapshot, liveState: null, updatedAt: Date.now() };
+      fam.children[childId] = { snapshot: normalized, liveState: null, updatedAt: Date.now() };
     });
   },
 
@@ -716,7 +761,11 @@ const Db = {
       if (!fam) return;
       children.forEach(c => {
         if (c?.id) {
-          fam.children[c.id] = { snapshot: c, liveState: null, updatedAt: Date.now() };
+          fam.children[c.id] = {
+            snapshot: normalizeChildSnapshot(c),
+            liveState: null,
+            updatedAt: Date.now(),
+          };
         }
       });
     });
@@ -840,8 +889,11 @@ const Db = {
       tokenCount: Object.keys(auth.tokens || {}).length,
     };
   },
+
+  normalizeChildSnapshot,
 };
 
 module.exports = Db;
 module.exports.hasBlobStorage = () => HAS_BLOB;
 module.exports.getBlobSdkVersion = getBlobSdkVersion;
+module.exports.normalizeChildSnapshot = normalizeChildSnapshot;

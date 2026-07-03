@@ -191,7 +191,7 @@ app.post('/api/pair/join', async (req, res, next) => {
       deviceToken: result.deviceToken,
       familyId: result.familyId,
       childId: result.childId,
-      snapshot: result.snapshot,
+      snapshot: Db.normalizeChildSnapshot(result.snapshot),
     });
   } catch (e) {
     next(e);
@@ -211,6 +211,7 @@ app.get('/api/sync/rules', async (req, res, next) => {
       const freshFamily = await Db.getFamily(family.id);
       snapshot = freshFamily?.children?.[device.childId]?.snapshot || null;
     }
+    if (snapshot) snapshot = Db.normalizeChildSnapshot(snapshot);
 
     res.json({
       childId: device.childId,
